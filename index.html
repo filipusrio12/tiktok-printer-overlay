@@ -1,0 +1,343 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TikTok Interactive Printer Overlay</title>
+    <script src="/socket.io/socket.io.js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Courier+Prime:wght@400;700&family=Poppins:wght@700;900&display=swap" rel="stylesheet">
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        html, body {
+            width: 100%;
+            height: 100%;
+            background: #000;
+            overflow: hidden;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+
+        /* Panggung utama berukuran tetap 1080x1920 yang di-scale otomatis */
+        .stage {
+            position: absolute;
+            width: 1080px;
+            height: 1920px;
+            background: url('background.png') no-repeat center center;
+            background-size: 1080px 1920px;
+            overflow: hidden;
+            transform-origin: center center;
+        }
+
+        /* Jalur Kertas Printer Kiri */
+        .paper-lane-left {
+            position: absolute;
+            top: 667px;       
+            left: 245px;      
+            width: 145px; 
+            height: 857px;
+            overflow: hidden;
+            pointer-events: none;
+        }
+
+        /* Jalur Kertas Printer Kanan */
+        .paper-lane-right {
+            position: absolute;
+            top: 756px;       
+            left: 698px;      
+            width: 150px;     
+            height: 766px;
+            overflow: hidden;
+            pointer-events: none;
+        }
+
+        /* Container Pembungkus agar semua item bergeser turun serentak */
+        .paper-content {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            width: 100%;
+        }
+
+        /* Animasi Mendorong Seluruh Kertas ke Bawah Bersamaan */
+        .paper-content.pushing {
+            animation: shiftDown 0.35s ease-out;
+        }
+
+        /* Teks Cetakan Struk Lurus */
+        .print-item {
+            width: 100%;
+            padding: 8px 6px;
+            margin-bottom: 12px;
+            background: transparent;
+            border-bottom: 1.5px dashed #444;
+            text-align: center;
+            font-family: 'Courier Prime', monospace;
+            color: #111111;
+            font-weight: 700;
+            font-size: 12px;
+            text-shadow: 0 0 0.5px rgba(0,0,0,0.5);
+            transition: transform 0.3s ease;
+        }
+
+        .print-header {
+            font-size: 9px;
+            color: #333;
+            margin-bottom: 3px;
+            border-bottom: 1px dotted #666;
+            padding-bottom: 2px;
+            display: flex;
+            justify-content: space-between;
+        }
+
+        .print-avatar {
+            width: 34px;
+            height: 34px;
+            border-radius: 50%;
+            display: block;
+            margin: 2px auto;
+            border: 1px solid #111;
+            filter: contrast(120%);
+        }
+
+        .print-username {
+            font-size: 12px;
+            font-weight: bold;
+            color: #000;
+            word-break: break-word;
+        }
+
+        .print-detail {
+            font-size: 10px;
+            color: #222;
+            margin-top: 2px;
+        }
+
+        .print-footer {
+            font-size: 8px;
+            color: #444;
+            margin-top: 3px;
+            letter-spacing: 1px;
+        }
+
+        .print-avatar-text {
+            width: 34px;
+            height: 34px;
+            border-radius: 50%;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            margin: 2px auto;
+            border: 1.5px solid #111;
+            background: #111;
+            color: #fff;
+            font-size: 14px;
+            font-weight: bold;
+            font-family: 'Courier Prime', monospace;
+        }
+
+        @keyframes shiftDown {
+            from {
+                transform: translateY(-70px);
+            }
+            to {
+                transform: translateY(0);
+            }
+        }
+
+        /* =========================================================================
+           JAM DIGITAL REAL-TIME
+           ========================================================================= */
+        .live-clock {
+            position: absolute;
+            top: 35px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: rgba(10, 10, 10, 0.9);
+            color: #00f2fe;
+            padding: 12px 28px;
+            font-family: 'Courier Prime', monospace;
+            font-size: 32px;
+            font-weight: bold;
+            border: 2px dashed #00f2fe;
+            border-radius: 12px;
+            z-index: 1000;
+            box-shadow: 0 0 15px rgba(0, 242, 254, 0.5);
+        }
+    </style>
+</head>
+<body>
+
+    <div class="stage" id="stage">
+        <!-- Jam Digital Real-time di Paling Atas -->
+        <div class="live-clock" id="liveClock">00:00:00</div>
+
+        <!-- Area Kertas Printer Kiri -->
+        <div class="paper-lane-left">
+            <div class="paper-content" id="laneLeft"></div>
+        </div>
+
+        <!-- Area Kertas Printer Kanan -->
+        <div class="paper-lane-right">
+            <div class="paper-content" id="laneRight"></div>
+        </div>
+    </div>
+
+    <script>
+        const socket = io();
+        const stage = document.getElementById('stage');
+        const laneLeft = document.getElementById('laneLeft');
+        const laneRight = document.getElementById('laneRight');
+
+        // Fungsi Auto-Scale Responsive Layar
+        function resizeStage() {
+            const targetWidth = 1080;
+            const targetHeight = 1920;
+            const windowWidth = window.innerWidth;
+            const windowHeight = window.innerHeight;
+
+            const scale = Math.min(windowWidth / targetWidth, windowHeight / targetHeight);
+            stage.style.transform = `scale(${scale})`;
+        }
+
+        window.addEventListener('resize', resizeStage);
+        resizeStage();
+
+        // Skrip Jam Digital Real-time (Selalu Berdetik)
+        function updateClock() {
+            const now = new Date();
+            const hours = String(now.getHours()).padStart(2, '0');
+            const minutes = String(now.getMinutes()).padStart(2, '0');
+            const seconds = String(now.getSeconds()).padStart(2, '0');
+            
+            const clockElement = document.getElementById('liveClock');
+            if (clockElement) {
+                clockElement.innerText = `${hours}:${minutes}:${seconds}`;
+            }
+        }
+        setInterval(updateClock, 1000);
+        updateClock();
+
+        // 1. Printer Kiri
+        const leftStartOffset = 0;   
+        const leftEndOffset = 0;     
+
+        // 2. Printer Kanan
+        const rightStartOffset = 0;  
+        const rightEndOffset = 0;    
+
+        // =========================================================================
+        // INISIALISASI AUDIO PRINTER TERMAL (ANTI-DELAY)
+        // =========================================================================
+        const printerAudio = new Audio('sound_printer.m4a');
+        printerAudio.volume = 0.7;
+        printerAudio.load(); 
+
+        function playPrinterSound() {
+            const soundClone = printerAudio.cloneNode(true);
+            soundClone.volume = printerAudio.volume;
+            soundClone.play().catch(e => {
+                console.log("Menunggu halaman di-klik untuk mengizinkan audio:", e);
+            });
+        }
+
+        function getTime() {
+            const now = new Date();
+            return now.toTimeString().split(' ')[0];
+        }
+
+        function applyLaneAlignments(lane, isLeft) {
+            const items = Array.from(lane.children);
+            const total = items.length;
+            if (total === 0) return;
+
+            const startOffset = isLeft ? leftStartOffset : rightStartOffset;
+            const endOffset = isLeft ? leftEndOffset : rightEndOffset;
+
+            items.forEach((item, index) => {
+                const ratio = total > 1 ? index / (total - 1) : 0;
+                const offset = startOffset + ratio * (endOffset - startOffset);
+                item.style.transform = `translateX(${offset}px)`;
+            });
+        }
+
+        function addItem(lane, htmlContent) {
+            const item = document.createElement('div');
+            item.className = 'print-item';
+            item.innerHTML = htmlContent;
+            
+            playPrinterSound();
+
+            lane.insertBefore(item, lane.firstChild);
+            applyLaneAlignments(lane, lane === laneLeft);
+
+            lane.classList.remove('pushing');
+            void lane.offsetWidth; 
+            lane.classList.add('pushing');
+
+            if (lane.children.length > 18) {
+                lane.removeChild(lane.lastChild);
+                applyLaneAlignments(lane, lane === laneLeft);
+            }
+        }
+
+        // Event Printer Kiri (User Join)
+        socket.on('print_left', (data) => {
+            const nickname = data.nickname || 'Penonton';
+            const initial = nickname.charAt(0).toUpperCase();
+
+            let avatarHtml = `<div class="print-avatar-text">${initial}</div>`;
+            if (data.avatar && data.avatar.startsWith('http')) {
+                avatarHtml = `<img class="print-avatar" src="${data.avatar}" alt="avatar" onerror="this.outerHTML='<div class=\\'print-avatar-text\\'>${initial}</div>'">`;
+            }
+
+            const content = `
+                <div class="print-header">
+                    <span>[JOIN]</span>
+                    <span>${getTime()}</span>
+                </div>
+                ${avatarHtml}
+                <div class="print-username">${nickname}</div>
+                <div class="print-footer">-- TERIMA KASIH --</div>
+            `;
+            addItem(laneLeft, content);
+        });
+
+        // Event Printer Kanan (Chat / Like / Gift)
+        socket.on('print_right', (data) => {
+            const nickname = data.nickname || 'Penonton';
+            let detailContent = '';
+
+            if (data.type === 'comment') {
+                detailContent = `<div class="print-comment">"${data.comment}"</div>`;
+            } else if (data.type === 'like') {
+                detailContent = `<div class="print-action">Menyukai Live (${data.likeCount}x)</div>`;
+            } else if (data.type === 'gift') {
+                let giftImgHtml = '';
+                if (data.giftImage && data.giftImage.startsWith('http')) {
+                    giftImgHtml = `<img class="print-avatar" src="${data.giftImage}" alt="gift" style="width: 32px; height: 32px; object-fit: contain; margin: 2px auto; display: block;">`;
+                }
+                detailContent = `
+                    ${giftImgHtml}
+                    <div class="print-action">Kirim: ${data.giftName}</div>
+                `;
+            }
+
+            const content = `
+                <div class="print-header">
+                    <span>[${data.type.toUpperCase()}]</span>
+                    <span>${getTime()}</span>
+                </div>
+                <div class="print-username">${nickname}</div>
+                ${detailContent}
+            `;
+            addItem(laneRight, content);
+        });
+    </script>
+</body>
+</html>

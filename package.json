@@ -1,0 +1,16 @@
+{
+	"name": "tiktok-printer",
+	"version": "1.0.0",
+	"description": "Tiktok Printer",
+	"main": "server.js",
+	"dependencies": {
+		"dotenv": "^16.6.1",
+		"express": "^4.22.3",
+		"socket.io": "^4.8.4",
+		"tiktok-live-connector": "^2.5.0"
+	},
+	"scripts": {
+		"app": "node server.js"
+	},
+	"author": "adierebel"
+}
